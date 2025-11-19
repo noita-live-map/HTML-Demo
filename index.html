@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Noita Map Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Top Menu Bar -->
+        <div class="menu-bar">
+            <div class="menu-section">
+                <h2>Markers</h2>
+                <div class="color-picker">
+                    <button class="color-btn active" data-color="red" style="background-color: #ff0000;" title="Red Marker"></button>
+                    <button class="color-btn" data-color="orange" style="background-color: #ff8800;" title="Orange Marker"></button>
+                    <button class="color-btn" data-color="yellow" style="background-color: #ffdd00;" title="Yellow Marker"></button>
+                    <button class="color-btn" data-color="green" style="background-color: #00ff00;" title="Green Marker"></button>
+                    <button class="color-btn" data-color="blue" style="background-color: #0088ff;" title="Blue Marker"></button>
+                    <button class="color-btn" data-color="purple" style="background-color: #aa00ff;" title="Purple Marker"></button>
+                    <button class="color-btn" data-color="pink" style="background-color: #ff00aa;" title="Pink Marker"></button>
+                    <button class="color-btn" data-color="cyan" style="background-color: #00ffff;" title="Cyan Marker"></button>
+                </div>
+            </div>
+            <div class="menu-section">
+                <button class="action-btn" id="clear-markers">Clear All Markers</button>
+                <button class="action-btn" id="toggle-edit">Edit Mode: ON</button>
+            </div>
+            <div class="menu-section">
+                <label for="image-input" class="file-input-label">
+                    <input type="file" id="image-input" accept="image/*" style="display: none;">
+                    Load Map Image
+                </label>
+            </div>
+            <div class="menu-section">
+                <h2>Zoom</h2>
+                <button class="action-btn" id="zoom-in">Zoom In (+)</button>
+                <button class="action-btn" id="zoom-out">Zoom Out (-)</button>
+                <button class="action-btn" id="zoom-reset">Reset (100%)</button>
+                <span id="zoom-level">100%</span>
+            </div>
+        </div>
+
+        <!-- Map Container -->
+        <div class="map-container" id="map-container">
+            <img id="map-image" src="" alt="Noita Map" class="map-image">
+            <div class="markers-layer" id="markers-layer"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+
