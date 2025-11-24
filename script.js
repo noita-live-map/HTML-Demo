@@ -267,11 +267,9 @@ function getColorValue(colorName) {
     const colors = {
         red: '#ff0000',
         orange: '#ff8800',
-        yellow: '#ffdd00',
-        green: '#00ff00',
         blue: '#0088ff',
-        purple: '#aa00ff',
-        pink: '#ff00aa',
+        magenta: '#ff00ff',
+        green: '#00ff00',
         cyan: '#00ffff'
     };
     return colors[colorName] || colors.red;
