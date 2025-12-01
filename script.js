@@ -1,38 +1,63 @@
 // Configuration
-let config = {
+const CONFIG = {
     editMode: true,
-    selectedColor: 'red',
+    selectedColor: '#ff0000',
     markers: [],
-    zoomLevel: 100, // Percentage
-    minZoom: 25,
-    maxZoom: 500
+    minZoom: 0.01,
+    maxZoom: 20
 };
+
+const STORAGE_KEY = 'noitaMapMarkers';
+
+// Game coordinate ranges
+const mapXRange = [-9999, 9999];
+const mapYRange = [-9999, 9999];
+
+// Static pre-defined markers
+const staticMarkers = [
+    { gameX: 1000, gameY: 1000, color: '#35c9d3', name: 'test', gameCoords: true }
+];
+
+function positionImageInBounds(imgElement, gameX, gameY) {
+    const imgX = gameX - mapXRange[0];
+    const imgY = gameY - mapYRange[0];
+    
+    imgElement.style.position = 'absolute';
+    imgElement.style.left = `${imgX}px`;
+    imgElement.style.top = `${imgY}px`;
+    
+    return imgElement;
+}
+
+// Transform state
+let scale = 1;
+let translateX = 0;
+let translateY = 0;
+let isDragging = false;
+let startX = 0;
+let startY = 0;
+let dragStartX = 0;
+let dragStartY = 0;
 
 // DOM Elements
 const mapImage = document.getElementById('map-image');
 const mapContainer = document.getElementById('map-container');
+const mapWrapper = document.getElementById('map-wrapper');
 const markersLayer = document.getElementById('markers-layer');
+const coordinateDisplay = document.getElementById('coordinate-display');
 const colorButtons = document.querySelectorAll('.color-btn');
 const clearMarkersBtn = document.getElementById('clear-markers');
 const toggleEditBtn = document.getElementById('toggle-edit');
 const imageInput = document.getElementById('image-input');
-const zoomInBtn = document.getElementById('zoom-in');
-const zoomOutBtn = document.getElementById('zoom-out');
 const zoomResetBtn = document.getElementById('zoom-reset');
-const zoomLevelSpan = document.getElementById('zoom-level');
 
 let mapImageLoaded = false;
+let markerIdCounter = 0;
 
 // Initialize
 function init() {
-    // Load saved markers from localStorage
     loadMarkers();
-    
-    // Set up event listeners
     setupEventListeners();
-    
-    // Update zoom display
-    updateZoomDisplay();
 }
 
 // Event Listeners
@@ -42,7 +67,7 @@ function setupEventListeners() {
         btn.addEventListener('click', () => {
             colorButtons.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            config.selectedColor = btn.dataset.color;
+            CONFIG.selectedColor = btn.dataset.color;
         });
     });
     
@@ -55,9 +80,10 @@ function setupEventListeners() {
     
     // Toggle edit mode
     toggleEditBtn.addEventListener('click', () => {
-        config.editMode = !config.editMode;
-        toggleEditBtn.textContent = `Edit Mode: ${config.editMode ? 'ON' : 'OFF'}`;
-        mapContainer.style.cursor = config.editMode ? 'crosshair' : 'default';
+        CONFIG.editMode = !CONFIG.editMode;
+        toggleEditBtn.textContent = CONFIG.editMode ? 'Edit Mode' : 'Drag Mode';
+        mapContainer.style.cursor = CONFIG.editMode ? 'crosshair' : 'grab';
+        coordinateDisplay.style.display = CONFIG.editMode ? 'block' : 'none';
     });
     
     // Image file input
@@ -69,74 +95,100 @@ function setupEventListeners() {
     });
     
     // Zoom controls
-    zoomInBtn.addEventListener('click', () => {
-        zoomIn();
-    });
-    
-    zoomOutBtn.addEventListener('click', () => {
-        zoomOut();
-    });
-    
-    zoomResetBtn.addEventListener('click', () => {
-        resetZoom();
-    });
+    zoomResetBtn.addEventListener('click', centerMap);
     
     // Keyboard shortcuts for zoom
     document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey || e.metaKey) {
-            if (e.key === '=' || e.key === '+') {
-                e.preventDefault();
-                zoomIn();
-            } else if (e.key === '-') {
-                e.preventDefault();
-                zoomOut();
-            } else if (e.key === '0') {
-                e.preventDefault();
-                resetZoom();
-            }
+        if (!(e.ctrlKey || e.metaKey)) return;
+        
+        const centerX = mapContainer.clientWidth / 2;
+        const centerY = mapContainer.clientHeight / 2;
+        
+        if (e.key === '=' || e.key === '+') {
+            e.preventDefault();
+            zoomAtPoint(centerX, centerY, 1.1);
+        } else if (e.key === '-') {
+            e.preventDefault();
+            zoomAtPoint(centerX, centerY, 0.9);
+        } else if (e.key === '0') {
+            e.preventDefault();
+            centerMap();
         }
     });
     
     // Mouse wheel zoom
     mapContainer.addEventListener('wheel', (e) => {
-        if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            if (e.deltaY < 0) {
-                zoomIn();
-            } else {
-                zoomOut();
+        e.preventDefault();
+        const rect = mapContainer.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const delta = e.deltaY > 0 ? 0.95 : 1.05;
+        zoomAtPoint(mouseX, mouseY, delta);
+    }, { passive: false });
+    
+    // Drag to pan
+    mapContainer.addEventListener('mousedown', (e) => {
+        if (e.target.classList.contains('marker')) return;
+        
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        startX = e.clientX - translateX;
+        startY = e.clientY - translateY;
+        mapContainer.classList.add('grabbing');
+    });
+    
+    mapContainer.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        translateX = e.clientX - startX;
+        translateY = e.clientY - startY;
+        updateTransform();
+    });
+    
+    document.addEventListener('mouseup', (e) => {
+        if (isDragging) {
+            const dragDistance = Math.sqrt(
+                Math.pow(e.clientX - dragStartX, 2) + 
+                Math.pow(e.clientY - dragStartY, 2)
+            );
+            
+            if (dragDistance < 5 && CONFIG.editMode && e.target === mapImage) {
+                handleMapClick(e);
             }
         }
+        isDragging = false;
+        mapContainer.classList.remove('grabbing');
     });
     
-    // Map click handler for placing markers
-    mapContainer.addEventListener('click', (e) => {
-        if (!config.editMode || !mapImageLoaded) return;
-        
-        const rect = mapImage.getBoundingClientRect();
-        
-        // Get click position relative to viewport
-        const clickX = e.clientX;
-        const clickY = e.clientY;
-        
-        // Check if click is within the image bounds
-        if (clickX < rect.left || clickX > rect.right || 
-            clickY < rect.top || clickY > rect.bottom) {
-            return;
-        }
-        
-        // Calculate relative position on the image (0 to 1)
-        const imgX = (clickX - rect.left) / rect.width;
-        const imgY = (clickY - rect.top) / rect.height;
-        
-        // Place marker
-        placeMarker(imgX, imgY, config.selectedColor);
-    });
-    
-    // Handle image load to update marker positions
+    // Handle image load
     mapImage.addEventListener('load', () => {
         mapImageLoaded = true;
-        setTimeout(updateMarkerPositions, 50);
+        updateMarkerLayerSize();
+        centerMap();
+        renderAllMarkers();
+    });
+    
+    // Window resize
+    window.addEventListener('resize', () => {
+        if (mapImageLoaded) {
+            updateMarkerLayerSize();
+        }
+    });
+    
+    mapContainer.addEventListener('mousemove', (e) => {
+        if (CONFIG.editMode && mapImageLoaded) {
+            updateCoordinateDisplay(e);
+        }
+    });
+    
+    mapContainer.addEventListener('mouseleave', () => {
+        coordinateDisplay.style.display = 'none';
+    });
+    
+    mapContainer.addEventListener('mouseenter', () => {
+        if (CONFIG.editMode) {
+            coordinateDisplay.style.display = 'block';
+        }
     });
 }
 
@@ -145,140 +197,210 @@ function loadImageFromFile(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
         mapImage.src = e.target.result;
-        // Reset zoom when loading new image
-        resetZoom();
     };
     reader.readAsDataURL(file);
 }
 
-// Zoom Functions
-function zoomIn() {
-    if (config.zoomLevel < config.maxZoom) {
-        config.zoomLevel = Math.min(config.zoomLevel + 25, config.maxZoom);
-        applyZoom();
-    }
+// Transform Functions
+function updateTransform() {
+    mapWrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    
+    const markerScale = 1 / scale;
+    document.querySelectorAll('.marker').forEach(marker => {
+        marker.style.transform = `translate(-50%, -50%) scale(${markerScale})`;
+    });
 }
 
-function zoomOut() {
-    if (config.zoomLevel > config.minZoom) {
-        config.zoomLevel = Math.max(config.zoomLevel - 25, config.minZoom);
-        applyZoom();
-    }
+function zoomAtPoint(mouseX, mouseY, delta) {
+    const newScale = Math.min(Math.max(CONFIG.minZoom, scale * delta), CONFIG.maxZoom);
+    const scaleChange = newScale / scale;
+    
+    translateX = mouseX - (mouseX - translateX) * scaleChange;
+    translateY = mouseY - (mouseY - translateY) * scaleChange;
+    
+    scale = newScale;
+    updateTransform();
 }
 
-function resetZoom() {
-    config.zoomLevel = 100;
-    applyZoom();
+function centerMap() {
+    if (!mapImageLoaded) return;
+    
+    const containerRect = mapContainer.getBoundingClientRect();
+    const imgWidth = mapImage.naturalWidth;
+    const imgHeight = mapImage.naturalHeight;
+    
+    const scaleX = (containerRect.width * 0.9) / imgWidth;
+    const scaleY = (containerRect.height * 0.9) / imgHeight;
+    scale = Math.min(scaleX, scaleY, 1);
+    
+    translateX = (containerRect.width - imgWidth * scale) / 2;
+    translateY = (containerRect.height - imgHeight * scale) / 2;
+    
+    updateTransform();
+    updateMarkerLayerSize();
 }
 
-function applyZoom() {
-    if (mapImageLoaded) {
-        mapImage.style.width = `${config.zoomLevel}%`;
-        mapImage.style.height = 'auto';
-        updateZoomDisplay();
-        setTimeout(updateMarkerPositions, 50);
-    }
-}
-
-function updateZoomDisplay() {
-    zoomLevelSpan.textContent = `${config.zoomLevel}%`;
+// Coordinate Display
+function updateCoordinateDisplay(e) {
+    if (!mapImageLoaded) return;
+    
+    const rect = mapContainer.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Convert to image coordinates
+    const imgX = (mouseX - translateX) / scale;
+    const imgY = (mouseY - translateY) / scale;
+    
+    // Get image dimensions for Y inversion
+    const imgWidth = mapImage.naturalWidth;
+    const imgHeight = mapImage.naturalHeight;
+    
+    const gameX = imgX + mapXRange[0];
+    const gameY = (imgHeight - imgY) + mapYRange[0];
+    
+    coordinateDisplay.style.left = `${e.clientX + 15}px`;
+    coordinateDisplay.style.top = `${e.clientY + 15}px`;
+    coordinateDisplay.textContent = `(${Math.round(gameX)}, ${Math.round(gameY)})`;
 }
 
 // Marker Management
-function placeMarker(x, y, color) {
+function handleMapClick(e) {
+    if (!CONFIG.editMode || !mapImageLoaded) return;
+    
+    const rect = mapContainer.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    
+    const imgX = (clickX - translateX) / scale;
+    const imgY = (clickY - translateY) / scale;
+    
+    const imgWidth = mapImage.naturalWidth;
+    const imgHeight = mapImage.naturalHeight;
+    
+    if (imgX < 0 || imgX > imgWidth || imgY < 0 || imgY > imgHeight) {
+        return;
+    }
+    
+    // Convert image coordinates to game coordinates
+    const gameX = imgX + mapXRange[0];
+    const gameY = (imgHeight - imgY) + mapYRange[0];
+    
+    placeMarker(gameX, gameY, CONFIG.selectedColor);
+}
+
+function placeMarker(gameX, gameY, color) {
     const marker = {
-        id: Date.now() + Math.random(),
-        x: x,
-        y: y,
-        color: color
+        id: ++markerIdCounter,
+        gameX: gameX,
+        gameY: gameY,
+        color: color,
+        gameCoords: true
     };
     
-    config.markers.push(marker);
+    CONFIG.markers.push(marker);
     renderMarker(marker);
     saveMarkers();
 }
 
-function renderMarker(marker) {
+function renderMarker(marker, isStatic = false) {
+    if (!mapImageLoaded) return;
+    
+    let imgX, imgY;
+    if (marker.gameCoords && marker.gameX !== undefined && marker.gameY !== undefined) {
+        const imgHeight = mapImage.naturalHeight;
+        imgX = marker.gameX - mapXRange[0];
+        imgY = imgHeight - (marker.gameY - mapYRange[0]);
+    } else {
+        // Fallback for old markers stored with image coordinates
+        imgX = marker.imgX || 0;
+        imgY = marker.imgY || 0;
+    }
+    
     const markerElement = document.createElement('div');
-    markerElement.className = 'marker';
+    markerElement.className = isStatic ? 'marker static-marker' : 'marker';
     markerElement.dataset.markerId = marker.id;
+    markerElement.dataset.isStatic = isStatic;
     markerElement.style.backgroundColor = getColorValue(marker.color);
     markerElement.style.color = getColorValue(marker.color);
+    markerElement.style.left = `${imgX}px`;
+    markerElement.style.top = `${imgY}px`;
+    markerElement.style.transform = `translate(-50%, -50%) scale(${1 / scale})`;
     
-    // Position will be set by updateMarkerPositions
-    markerElement.style.left = `${marker.x * 100}%`;
-    markerElement.style.top = `${marker.y * 100}%`;
+    if (marker.name) {
+        markerElement.title = marker.name;
+    }
     
-    // Add click handler to remove marker
-    markerElement.addEventListener('click', (e) => {
-        if (config.editMode) {
-            e.stopPropagation();
-            removeMarker(marker.id);
-        }
-    });
+    if (!isStatic) {
+        markerElement.addEventListener('click', (e) => {
+            if (CONFIG.editMode) {
+                e.stopPropagation();
+                removeMarker(marker.id);
+            }
+        });
+    }
     
     markersLayer.appendChild(markerElement);
 }
 
-function updateMarkerPositions() {
+function updateMarkerLayerSize() {
     if (!mapImageLoaded) return;
     
-    const rect = mapImage.getBoundingClientRect();
-    const containerRect = mapContainer.getBoundingClientRect();
+    const imgWidth = mapImage.naturalWidth;
+    const imgHeight = mapImage.naturalHeight;
     
-    // Calculate image position relative to container
-    const imgLeft = rect.left - containerRect.left + mapContainer.scrollLeft;
-    const imgTop = rect.top - containerRect.top + mapContainer.scrollTop;
+    markersLayer.style.width = `${imgWidth}px`;
+    markersLayer.style.height = `${imgHeight}px`;
     
-    // Update markers layer size and position to match image
-    markersLayer.style.width = `${rect.width}px`;
-    markersLayer.style.height = `${rect.height}px`;
-    markersLayer.style.left = `${imgLeft}px`;
-    markersLayer.style.top = `${imgTop}px`;
-    
-    // Update marker positions (using percentage for relative positioning)
-    const markers = markersLayer.querySelectorAll('.marker');
-    markers.forEach(markerEl => {
-        const markerId = markerEl.dataset.markerId;
-        const marker = config.markers.find(m => m.id.toString() === markerId);
-        if (marker) {
-            markerEl.style.left = `${marker.x * 100}%`;
-            markerEl.style.top = `${marker.y * 100}%`;
-        }
+    document.querySelectorAll('.marker').forEach(marker => {
+        marker.style.transform = `translate(-50%, -50%) scale(${1 / scale})`;
     });
 }
 
 function removeMarker(markerId) {
-    config.markers = config.markers.filter(m => m.id !== markerId);
+    const marker = CONFIG.markers.find(m => m.id === markerId);
+    if (marker && marker.static) return;
+    
+    CONFIG.markers = CONFIG.markers.filter(m => m.id !== markerId);
     const markerElement = markersLayer.querySelector(`[data-marker-id="${markerId}"]`);
-    if (markerElement) {
+    if (markerElement && !markerElement.dataset.isStatic) {
         markerElement.remove();
     }
     saveMarkers();
 }
 
 function clearAllMarkers() {
-    config.markers = [];
+    CONFIG.markers = CONFIG.markers.filter(m => m.static);
     markersLayer.innerHTML = '';
+    renderAllMarkers();
     saveMarkers();
 }
 
-function getColorValue(colorName) {
-    const colors = {
-        red: '#ff0000',
-        orange: '#ff8800',
-        blue: '#0088ff',
-        magenta: '#ff00ff',
-        green: '#00ff00',
-        cyan: '#00ffff'
-    };
-    return colors[colorName] || colors.red;
+function renderAllMarkers() {
+    if (!mapImageLoaded) return;
+    
+    staticMarkers.forEach((marker, index) => {
+        renderMarker({ ...marker, id: `static-${index}`, static: true }, true);
+    });
+    
+    CONFIG.markers.forEach(marker => {
+        if (!marker.static) {
+            renderMarker(marker, false);
+        }
+    });
 }
 
-// LocalStorage for markers persistence
+function getColorValue(hexColor) {
+    if (hexColor && hexColor.startsWith('#')) {
+        return hexColor;
+    }
+    return '#ff0000';
+}
+
+// LocalStorage
 function saveMarkers() {
     try {
-        localStorage.setItem('noitaMapMarkers', JSON.stringify(config.markers));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(CONFIG.markers));
     } catch (error) {
         console.error('Error saving markers:', error);
     }
@@ -286,25 +408,17 @@ function saveMarkers() {
 
 function loadMarkers() {
     try {
-        const saved = localStorage.getItem('noitaMapMarkers');
+        const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
-            config.markers = JSON.parse(saved);
-            config.markers.forEach(marker => renderMarker(marker));
+            CONFIG.markers = JSON.parse(saved);
+            if (CONFIG.markers.length > 0) {
+                markerIdCounter = Math.max(...CONFIG.markers.map(m => m.id || 0));
+            }
         }
     } catch (error) {
         console.error('Error loading markers:', error);
     }
 }
 
-// Handle window resize to update marker positions
-window.addEventListener('resize', () => {
-    setTimeout(updateMarkerPositions, 100);
-});
-
-// Handle scroll to keep markers aligned
-mapContainer.addEventListener('scroll', () => {
-    updateMarkerPositions();
-});
-
-// Initialize on page load
+// Initialize
 init();
