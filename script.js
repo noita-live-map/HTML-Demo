@@ -6,7 +6,7 @@ const CONFIG = {
     minZoom: 0.01,
     maxZoom: 20,
     backendEnabled: false,
-    backendUrl: 'http://127.0.0.1:5000',
+    backendUrl: 'https://noita-map-prod-gfazede8d3embzde.canadacentral-01.azurewebsites.net',
     refreshInterval: 5000 // 5 seconds
 };
 
@@ -90,13 +90,18 @@ function screenToImageCoords(screenX, screenY) {
 function init() {
     // Get game_id from URL query parameters
     const urlParams = new URLSearchParams(window.location.search);
-    GAME_ID = urlParams.get('game_id') || '12345678';
+    GAME_ID = urlParams.get('game_id') || '';
     
     loadMarkers();
     setupEventListeners();
     
     if (gameIdInput) {
         gameIdInput.value = GAME_ID;
+        gameIdInput.placeholder = 'Enter valid game_id';
+    }
+    
+    if (!GAME_ID) {
+        console.warn('⚠️ No game_id provided. Set it via URL ?game_id=YOUR_ID or in the input field');
     }
 }
 
@@ -558,7 +563,12 @@ function stopBackendRefresh() {
 }
 
 async function updatePlayerPosition() {
-    if (!CONFIG.backendEnabled || !GAME_ID) return;
+    if (!CONFIG.backendEnabled || !GAME_ID) {
+        if (!GAME_ID) {
+            console.warn('⚠️ No game_id set - cannot fetch player position');
+        }
+        return;
+    }
     
     const url = `${CONFIG.backendUrl}/info?game_id=${GAME_ID}`;
     
@@ -567,7 +577,24 @@ async function updatePlayerPosition() {
         const response = await fetch(url);
         
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // Try to get error message from response
+            let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            try {
+                const errorData = await response.json();
+                if (errorData.message || errorData.error) {
+                    errorMessage = errorData.message || errorData.error;
+                }
+            } catch (e) {
+                // Not JSON, that's okay
+            }
+            
+            if (response.status === 404 || errorMessage.toLowerCase().includes('not found')) {
+                console.error(`❌ Game ID "${GAME_ID}" not found in the database!`);
+                console.error('   Please use a valid game_id that exists in your backend');
+            } else {
+                throw new Error(errorMessage);
+            }
+            return;
         }
         
         const data = await response.json();
@@ -609,20 +636,35 @@ async function updateMapTerrain() {
     
     // Only update if source is different to avoid unnecessary reloads
     if (mapImage.src !== newImageSrc) {
-        try {
-            console.log(`Updating terrain image from: ${newImageSrc}`);
-            mapImage.src = newImageSrc;
-            
-            // Add error handler for image load failures
-            mapImage.onerror = () => {
-                console.error('❌ Failed to load terrain image from backend!');
-                console.error(`   URL: ${newImageSrc}`);
-                console.error('   Make sure your backend server is running and the /terrain endpoint exists');
-            };
-        } catch (error) {
-            console.error('Error updating map terrain:', error);
-            console.error('URL attempted:', newImageSrc);
-        }
+        console.log(`Updating terrain image from: ${newImageSrc}`);
+        
+        // Set up one-time error handler before changing src
+        const errorHandler = () => {
+            console.error('❌ Failed to load terrain image from backend!');
+            console.error(`   URL: ${newImageSrc}`);
+            console.error('   Check the Network tab - the server returned 400 Bad Request');
+            console.error('');
+            console.error('   Common causes:');
+            console.error(`   - Game ID "${GAME_ID}" not found in the database`);
+            console.error('   - Invalid game_id format');
+            console.error('   - Wrong endpoint path');
+            console.error('');
+            console.error('   Solution: Use a valid game_id that exists in your backend database');
+            mapImage.removeEventListener('error', errorHandler);
+        };
+        
+        const loadHandler = () => {
+            console.log('✅ Terrain image loaded successfully');
+            mapImage.removeEventListener('load', loadHandler);
+        };
+        
+        // Add event listeners (one-time)
+        mapImage.addEventListener('error', errorHandler, { once: true });
+        mapImage.addEventListener('load', loadHandler, { once: true });
+        
+        // Set the image source directly - no fetch() needed
+        // Browsers can load images cross-origin without CORS for display
+        mapImage.src = newImageSrc;
     }
 }
 
