@@ -131,11 +131,27 @@ function setupEventListeners() {
     
     // Backend integration controls
     if (toggleBackendBtn) {
-        toggleBackendBtn.addEventListener('click', () => {
+        toggleBackendBtn.addEventListener('click', async () => {
             CONFIG.backendEnabled = !CONFIG.backendEnabled;
             toggleBackendBtn.textContent = CONFIG.backendEnabled ? 'Disable Backend' : 'Enable Backend';
             if (CONFIG.backendEnabled) {
-                startBackendRefresh();
+                console.log('Backend enabled, testing connection...');
+                const connected = await testBackendConnection();
+                if (connected) {
+                    startBackendRefresh();
+                    // Do immediate fetch instead of waiting for interval
+                    try {
+                        await updatePlayerPosition();
+                        await updateMapTerrain();
+                    } catch (error) {
+                        console.error('Initial backend fetch failed:', error);
+                    }
+                } else {
+                    // Disable backend if connection test fails
+                    CONFIG.backendEnabled = false;
+                    toggleBackendBtn.textContent = 'Enable Backend';
+                    console.warn('Backend disabled due to connection failure');
+                }
             } else {
                 stopBackendRefresh();
             }
@@ -231,11 +247,13 @@ function setupEventListeners() {
         renderAllMarkers();
         createPlayerMarker();
         
-        // Start backend refresh if enabled
-        if (CONFIG.backendEnabled) {
+        // Start backend refresh if enabled (in case it wasn't started yet)
+        if (CONFIG.backendEnabled && !refreshIntervalId) {
             startBackendRefresh();
         }
     });
+    
+    // Note: Initial image load from backend happens when backend is enabled via button
     
     // Window resize
     window.addEventListener('resize', () => {
@@ -480,6 +498,38 @@ function loadMarkers() {
 }
 
 // Backend API functions
+async function testBackendConnection() {
+    try {
+        const testUrl = `${CONFIG.backendUrl}/info?game_id=${GAME_ID || 'test'}`;
+        console.log(`Testing backend connection to: ${CONFIG.backendUrl}...`);
+        
+        // Create timeout controller
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        
+        const response = await fetch(testUrl, { 
+            method: 'GET',
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        console.log('✅ Backend server is reachable!');
+        return true;
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            console.error('❌ Connection timeout - server may be slow or unreachable');
+        } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+            console.error('❌ Backend server connection failed!');
+            console.error(`   Server URL: ${CONFIG.backendUrl}`);
+            console.error('   Make sure your Flask/Python backend server is running');
+            console.error('   Example: python app.py or flask run');
+        } else {
+            console.error('❌ Connection error:', error.message);
+        }
+        return false;
+    }
+}
+
 function startBackendRefresh() {
     stopBackendRefresh();
     
@@ -487,6 +537,8 @@ function startBackendRefresh() {
         console.warn('No game_id set, cannot start backend refresh');
         return;
     }
+    
+    console.log(`Starting backend refresh for game_id: ${GAME_ID}, URL: ${CONFIG.backendUrl}`);
     
     refreshIntervalId = setInterval(async () => {
         try {
@@ -508,32 +560,69 @@ function stopBackendRefresh() {
 async function updatePlayerPosition() {
     if (!CONFIG.backendEnabled || !GAME_ID) return;
     
+    const url = `${CONFIG.backendUrl}/info?game_id=${GAME_ID}`;
+    
     try {
-        const response = await fetch(`${CONFIG.backendUrl}/info?game_id=${GAME_ID}`);
+        console.log(`Fetching player position from: ${url}`);
+        const response = await fetch(url);
+        
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
+        
         const data = await response.json();
+        console.log('Player position data received:', data);
         
         if (data.x !== undefined && data.y !== undefined) {
             updatePlayerMarkerPosition(data.x, data.y);
+        } else {
+            console.warn('Player position data missing x or y:', data);
         }
     } catch (error) {
         console.error('Error fetching player position:', error);
+        console.error('URL attempted:', url);
+        
+        // Provide specific error messages
+        if (error.name === 'TypeError') {
+            if (error.message.includes('Failed to fetch') || error.message.includes('fetch')) {
+                console.error('❌ Connection refused - Backend server is not running!');
+                console.error(`   Make sure your backend server is running on ${CONFIG.backendUrl}`);
+                console.error('   Common causes:');
+                console.error('   - Server not started');
+                console.error('   - Server running on different port');
+                console.error('   - Firewall blocking connection');
+            } else {
+                console.error('Network error:', error.message);
+            }
+        } else {
+            console.error('Error details:', error);
+        }
     }
 }
 
 async function updateMapTerrain() {
-    if (!CONFIG.backendEnabled || !GAME_ID || !mapImageLoaded) return;
+    if (!CONFIG.backendEnabled || !GAME_ID) return;
     
-    try {
-        const timestamp = new Date().getTime();
-        const newImageSrc = `${CONFIG.backendUrl}/terrain?game_id=${GAME_ID}&time=${timestamp}`;
-        
-        // Update the image source (browser will handle caching with timestamp)
-        mapImage.src = newImageSrc;
-    } catch (error) {
-        console.error('Error updating map terrain:', error);
+    // Allow terrain update even if image hasn't loaded yet (for initial load)
+    const timestamp = new Date().getTime();
+    const newImageSrc = `${CONFIG.backendUrl}/terrain?game_id=${GAME_ID}&time=${timestamp}`;
+    
+    // Only update if source is different to avoid unnecessary reloads
+    if (mapImage.src !== newImageSrc) {
+        try {
+            console.log(`Updating terrain image from: ${newImageSrc}`);
+            mapImage.src = newImageSrc;
+            
+            // Add error handler for image load failures
+            mapImage.onerror = () => {
+                console.error('❌ Failed to load terrain image from backend!');
+                console.error(`   URL: ${newImageSrc}`);
+                console.error('   Make sure your backend server is running and the /terrain endpoint exists');
+            };
+        } catch (error) {
+            console.error('Error updating map terrain:', error);
+            console.error('URL attempted:', newImageSrc);
+        }
     }
 }
 
