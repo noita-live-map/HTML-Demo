@@ -26,13 +26,11 @@
                 <button class="action-btn" id="toggle-edit">Edit Mode</button>
             </div>
             <div class="menu-section">
-                <label for="image-input" class="file-input-label">
-                    <input type="file" id="image-input" accept="image/*" style="display: none;">
-                    Load Map Image
-                </label>
+                <button class="action-btn" id="zoom-reset">Reset Zoom</button>
             </div>
             <div class="menu-section">
-                <button class="action-btn" id="zoom-reset">Reset Zoom</button>
+                <button class="action-btn" id="toggle-backend">Enable Backend</button>
+                <input type="text" id="game-id-input" placeholder="Game ID" style="width: 120px;" title="Game ID for backend API">
             </div>
         </div>
 
@@ -41,6 +39,7 @@
             <div class="map-wrapper" id="map-wrapper">
                 <img id="map-image" src="" alt="Noita Map" class="map-image">
                 <div class="markers-layer" id="markers-layer"></div>
+                <div class="player-overlay" id="player-overlay"></div>
             </div>
             <div class="coordinate-display" id="coordinate-display"></div>
         </div>

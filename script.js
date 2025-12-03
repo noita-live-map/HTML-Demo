@@ -4,60 +4,100 @@ const CONFIG = {
     selectedColor: '#ff0000',
     markers: [],
     minZoom: 0.01,
-    maxZoom: 20
+    maxZoom: 20,
+    backendEnabled: false,
+    backendUrl: 'http://127.0.0.1:5000',
+    refreshInterval: 5000 // 5 seconds
 };
 
 const STORAGE_KEY = 'noitaMapMarkers';
 
+// Backend API configuration
+let GAME_ID = null;
+let refreshIntervalId = null;
+
 // Game coordinate ranges
-const mapXRange = [-9999, 9999];
-const mapYRange = [-9999, 9999];
+const mapXRange = [-4096, 4096];
+const mapYRange = [-2048, 14336];
 
 // Static pre-defined markers
 const staticMarkers = [
-    { gameX: 1000, gameY: 1000, color: '#35c9d3', name: 'test', gameCoords: true }
+    // Bosses
+    { gameX: 2346, gameY: 7443, color: '#d65930', name: 'Suomuhuaki (Dragon)', gameCoords: true },
+    { gameX: 4168, gameY: 888, color: '#35c9d3', name: 'Sauvojen tuntija (Connoisseur of Wands)', gameCoords: true },
+    { gameX: -4841, gameY: 850, color: '#35c9d3', name: 'Ylialkemisti (High Alchemist)', gameCoords: true },
+    { gameX: 3555, gameY: 13025, color: '#35c9d3', name: 'Veska, Molari, Mokke, Seula (Gate Guardian)', gameCoords: true },
+    { gameX: 3555, gameY: 13025, color: '#35c9d3', name: 'Kolmisilmä (Three-Eye)', gameCoords: true },
+
+    // Orbs
+    { gameX: 768, gameY: -1280, icon: 'icons/orb_0.png', name: 'Orb 0 - Sea of Lava', gameCoords: true },
+    { gameX: 3328, gameY: 1792, icon: 'icons/orb_3.png', name: 'Orb 3 - Nuke', gameCoords: true },
+    { gameX: -4352, gameY: 3840, icon: 'icons/orb_5.png', name: 'Orb 5 - Holy Bomb', gameCoords: true },
+    { gameX: -3840, gameY: 9984, icon: 'icons/orb_6.png', name: 'Orb 6 - Spiral Shot', gameCoords: true },
+    { gameX: 4352, gameY: 768, icon: 'icons/orb_7.png', name: 'Orb 7 - Thundercloud', gameCoords: true },
+    { gameX: -256, gameY: 16128, icon: 'icons/orb_8.png', name: 'Orb 8 - Fireworks!', gameCoords: true },
 ];
 
-function positionImageInBounds(imgElement, gameX, gameY) {
-    const imgX = gameX - mapXRange[0];
-    const imgY = gameY - mapYRange[0];
-    
-    imgElement.style.position = 'absolute';
-    imgElement.style.left = `${imgX}px`;
-    imgElement.style.top = `${imgY}px`;
-    
-    return imgElement;
-}
-
-// Transform state
+// View transform state
 let scale = 1;
 let translateX = 0;
 let translateY = 0;
 let isDragging = false;
-let startX = 0;
-let startY = 0;
 let dragStartX = 0;
 let dragStartY = 0;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
 
 // DOM Elements
 const mapImage = document.getElementById('map-image');
 const mapContainer = document.getElementById('map-container');
 const mapWrapper = document.getElementById('map-wrapper');
 const markersLayer = document.getElementById('markers-layer');
+const playerOverlay = document.getElementById('player-overlay');
 const coordinateDisplay = document.getElementById('coordinate-display');
 const colorButtons = document.querySelectorAll('.color-btn');
 const clearMarkersBtn = document.getElementById('clear-markers');
 const toggleEditBtn = document.getElementById('toggle-edit');
-const imageInput = document.getElementById('image-input');
 const zoomResetBtn = document.getElementById('zoom-reset');
+const toggleBackendBtn = document.getElementById('toggle-backend');
+const gameIdInput = document.getElementById('game-id-input');
 
 let mapImageLoaded = false;
 let markerIdCounter = 0;
+let playerMarker = null;
+let isFirstImageLoad = true;
+
+// Coordinate conversion utilities
+function gameToImageCoords(gameX, gameY, imgHeight) {
+    const imgX = gameX - mapXRange[0];
+    const imgY = imgHeight - (gameY - mapYRange[0]);
+    return [imgX, imgY];
+}
+
+function imageToGameCoords(imgX, imgY, imgHeight) {
+    const gameX = imgX + mapXRange[0];
+    const gameY = (imgHeight - imgY) + mapYRange[0];
+    return [gameX, gameY];
+}
+
+function screenToImageCoords(screenX, screenY) {
+    const imgX = (screenX - translateX) / scale;
+    const imgY = (screenY - translateY) / scale;
+    return [imgX, imgY];
+}
 
 // Initialize
 function init() {
+    // Get game_id from URL query parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    GAME_ID = urlParams.get('game_id') || '12345678';
+    
     loadMarkers();
     setupEventListeners();
+    
+    if (gameIdInput) {
+        gameIdInput.value = GAME_ID;
+    }
 }
 
 // Event Listeners
@@ -86,16 +126,31 @@ function setupEventListeners() {
         coordinateDisplay.style.display = CONFIG.editMode ? 'block' : 'none';
     });
     
-    // Image file input
-    imageInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            loadImageFromFile(file);
-        }
-    });
-    
     // Zoom controls
     zoomResetBtn.addEventListener('click', centerMap);
+    
+    // Backend integration controls
+    if (toggleBackendBtn) {
+        toggleBackendBtn.addEventListener('click', () => {
+            CONFIG.backendEnabled = !CONFIG.backendEnabled;
+            toggleBackendBtn.textContent = CONFIG.backendEnabled ? 'Disable Backend' : 'Enable Backend';
+            if (CONFIG.backendEnabled) {
+                startBackendRefresh();
+            } else {
+                stopBackendRefresh();
+            }
+        });
+    }
+    
+    if (gameIdInput) {
+        gameIdInput.addEventListener('change', (e) => {
+            GAME_ID = e.target.value || '12345678';
+            if (CONFIG.backendEnabled) {
+                stopBackendRefresh();
+                startBackendRefresh();
+            }
+        });
+    }
     
     // Keyboard shortcuts for zoom
     document.addEventListener('keydown', (e) => {
@@ -133,16 +188,19 @@ function setupEventListeners() {
         isDragging = true;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
-        startX = e.clientX - translateX;
-        startY = e.clientY - translateY;
+        dragOffsetX = e.clientX - translateX;
+        dragOffsetY = e.clientY - translateY;
         mapContainer.classList.add('grabbing');
     });
     
     mapContainer.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        translateX = e.clientX - startX;
-        translateY = e.clientY - startY;
-        updateTransform();
+        if (isDragging) {
+            translateX = e.clientX - dragOffsetX;
+            translateY = e.clientY - dragOffsetY;
+            updateTransform();
+        } else if (CONFIG.editMode && mapImageLoaded) {
+            updateCoordinateDisplay(e);
+        }
     });
     
     document.addEventListener('mouseup', (e) => {
@@ -160,12 +218,23 @@ function setupEventListeners() {
         mapContainer.classList.remove('grabbing');
     });
     
-    // Handle image load
+    // Handle image load - only center on first load
     mapImage.addEventListener('load', () => {
         mapImageLoaded = true;
         updateMarkerLayerSize();
-        centerMap();
+        
+        if (isFirstImageLoad) {
+            centerMap();
+            isFirstImageLoad = false;
+        }
+        
         renderAllMarkers();
+        createPlayerMarker();
+        
+        // Start backend refresh if enabled
+        if (CONFIG.backendEnabled) {
+            startBackendRefresh();
+        }
     });
     
     // Window resize
@@ -175,12 +244,7 @@ function setupEventListeners() {
         }
     });
     
-    mapContainer.addEventListener('mousemove', (e) => {
-        if (CONFIG.editMode && mapImageLoaded) {
-            updateCoordinateDisplay(e);
-        }
-    });
-    
+    // Coordinate display
     mapContainer.addEventListener('mouseleave', () => {
         coordinateDisplay.style.display = 'none';
     });
@@ -192,23 +256,23 @@ function setupEventListeners() {
     });
 }
 
-// Image Loading
-function loadImageFromFile(file) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        mapImage.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-}
-
-// Transform Functions
+// Transform functions
 function updateTransform() {
     mapWrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-    
+    updateMarkerTransforms();
+}
+
+function updateMarkerTransforms() {
     const markerScale = 1 / scale;
+    const transform = `translate(-50%, -50%) scale(${markerScale})`;
+    
     document.querySelectorAll('.marker').forEach(marker => {
-        marker.style.transform = `translate(-50%, -50%) scale(${markerScale})`;
+        marker.style.transform = transform;
     });
+    
+    if (playerMarker) {
+        playerMarker.style.transform = transform;
+    }
 }
 
 function zoomAtPoint(mouseX, mouseY, delta) {
@@ -240,41 +304,31 @@ function centerMap() {
     updateMarkerLayerSize();
 }
 
-// Coordinate Display
+// Coordinate display
 function updateCoordinateDisplay(e) {
     if (!mapImageLoaded) return;
     
     const rect = mapContainer.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
     
-    // Convert to image coordinates
-    const imgX = (mouseX - translateX) / scale;
-    const imgY = (mouseY - translateY) / scale;
-    
-    // Get image dimensions for Y inversion
-    const imgWidth = mapImage.naturalWidth;
-    const imgHeight = mapImage.naturalHeight;
-    
-    const gameX = imgX + mapXRange[0];
-    const gameY = (imgHeight - imgY) + mapYRange[0];
+    const [imgX, imgY] = screenToImageCoords(screenX, screenY);
+    const [gameX, gameY] = imageToGameCoords(imgX, imgY, mapImage.naturalHeight);
     
     coordinateDisplay.style.left = `${e.clientX + 15}px`;
     coordinateDisplay.style.top = `${e.clientY + 15}px`;
     coordinateDisplay.textContent = `(${Math.round(gameX)}, ${Math.round(gameY)})`;
 }
 
-// Marker Management
+// Marker management
 function handleMapClick(e) {
     if (!CONFIG.editMode || !mapImageLoaded) return;
     
     const rect = mapContainer.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
     
-    const imgX = (clickX - translateX) / scale;
-    const imgY = (clickY - translateY) / scale;
-    
+    const [imgX, imgY] = screenToImageCoords(screenX, screenY);
     const imgWidth = mapImage.naturalWidth;
     const imgHeight = mapImage.naturalHeight;
     
@@ -282,10 +336,7 @@ function handleMapClick(e) {
         return;
     }
     
-    // Convert image coordinates to game coordinates
-    const gameX = imgX + mapXRange[0];
-    const gameY = (imgHeight - imgY) + mapYRange[0];
-    
+    const [gameX, gameY] = imageToGameCoords(imgX, imgY, imgHeight);
     placeMarker(gameX, gameY, CONFIG.selectedColor);
 }
 
@@ -308,9 +359,7 @@ function renderMarker(marker, isStatic = false) {
     
     let imgX, imgY;
     if (marker.gameCoords && marker.gameX !== undefined && marker.gameY !== undefined) {
-        const imgHeight = mapImage.naturalHeight;
-        imgX = marker.gameX - mapXRange[0];
-        imgY = imgHeight - (marker.gameY - mapYRange[0]);
+        [imgX, imgY] = gameToImageCoords(marker.gameX, marker.gameY, mapImage.naturalHeight);
     } else {
         // Fallback for old markers stored with image coordinates
         imgX = marker.imgX || 0;
@@ -321,11 +370,23 @@ function renderMarker(marker, isStatic = false) {
     markerElement.className = isStatic ? 'marker static-marker' : 'marker';
     markerElement.dataset.markerId = marker.id;
     markerElement.dataset.isStatic = isStatic;
-    markerElement.style.backgroundColor = getColorValue(marker.color);
-    markerElement.style.color = getColorValue(marker.color);
     markerElement.style.left = `${imgX}px`;
     markerElement.style.top = `${imgY}px`;
     markerElement.style.transform = `translate(-50%, -50%) scale(${1 / scale})`;
+    
+    if (marker.icon) {
+        markerElement.classList.add('icon-marker');
+        const iconImg = document.createElement('img');
+        iconImg.src = marker.icon;
+        iconImg.alt = marker.name || 'Marker';
+        iconImg.style.width = '100%';
+        iconImg.style.height = '100%';
+        iconImg.style.objectFit = 'contain';
+        markerElement.appendChild(iconImg);
+    } else {
+        markerElement.style.backgroundColor = getColorValue(marker.color);
+        markerElement.style.color = getColorValue(marker.color);
+    }
     
     if (marker.name) {
         markerElement.title = marker.name;
@@ -351,10 +412,8 @@ function updateMarkerLayerSize() {
     
     markersLayer.style.width = `${imgWidth}px`;
     markersLayer.style.height = `${imgHeight}px`;
-    
-    document.querySelectorAll('.marker').forEach(marker => {
-        marker.style.transform = `translate(-50%, -50%) scale(${1 / scale})`;
-    });
+    updatePlayerOverlaySize();
+    updateMarkerTransforms();
 }
 
 function removeMarker(markerId) {
@@ -412,12 +471,104 @@ function loadMarkers() {
         if (saved) {
             CONFIG.markers = JSON.parse(saved);
             if (CONFIG.markers.length > 0) {
-                markerIdCounter = Math.max(...CONFIG.markers.map(m => m.id || 0));
+                markerIdCounter = Math.max(...CONFIG.markers.map(m => m.id || 0), 0);
             }
         }
     } catch (error) {
         console.error('Error loading markers:', error);
     }
+}
+
+// Backend API functions
+function startBackendRefresh() {
+    stopBackendRefresh();
+    
+    if (!GAME_ID) {
+        console.warn('No game_id set, cannot start backend refresh');
+        return;
+    }
+    
+    refreshIntervalId = setInterval(async () => {
+        try {
+            await updatePlayerPosition();
+            await updateMapTerrain();
+        } catch (error) {
+            console.error('Error refreshing backend data:', error);
+        }
+    }, CONFIG.refreshInterval);
+}
+
+function stopBackendRefresh() {
+    if (refreshIntervalId) {
+        clearInterval(refreshIntervalId);
+        refreshIntervalId = null;
+    }
+}
+
+async function updatePlayerPosition() {
+    if (!CONFIG.backendEnabled || !GAME_ID) return;
+    
+    try {
+        const response = await fetch(`${CONFIG.backendUrl}/info?game_id=${GAME_ID}`);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        
+        if (data.x !== undefined && data.y !== undefined) {
+            updatePlayerMarkerPosition(data.x, data.y);
+        }
+    } catch (error) {
+        console.error('Error fetching player position:', error);
+    }
+}
+
+async function updateMapTerrain() {
+    if (!CONFIG.backendEnabled || !GAME_ID || !mapImageLoaded) return;
+    
+    try {
+        const timestamp = new Date().getTime();
+        const newImageSrc = `${CONFIG.backendUrl}/terrain?game_id=${GAME_ID}&time=${timestamp}`;
+        
+        // Update the image source (browser will handle caching with timestamp)
+        mapImage.src = newImageSrc;
+    } catch (error) {
+        console.error('Error updating map terrain:', error);
+    }
+}
+
+function createPlayerMarker() {
+    if (!mapImageLoaded || playerMarker || !playerOverlay) return;
+    
+    playerOverlay.innerHTML = '';
+    const markerEl = document.createElement('div');
+    markerEl.className = 'marker player-marker';
+    markerEl.style.left = '0px';
+    markerEl.style.top = '0px';
+    markerEl.title = 'Player';
+    
+    playerOverlay.appendChild(markerEl);
+    playerMarker = markerEl;
+    updatePlayerOverlaySize();
+}
+
+function updatePlayerMarkerPosition(gameX, gameY) {
+    if (!mapImageLoaded || !playerMarker) return;
+    
+    const [imgX, imgY] = gameToImageCoords(gameX, gameY, mapImage.naturalHeight);
+    playerMarker.style.left = `${imgX}px`;
+    playerMarker.style.top = `${imgY}px`;
+    updateMarkerTransforms();
+}
+
+function updatePlayerOverlaySize() {
+    if (!mapImageLoaded || !playerOverlay) return;
+    
+    const imgWidth = mapImage.naturalWidth;
+    const imgHeight = mapImage.naturalHeight;
+    
+    playerOverlay.style.width = `${imgWidth}px`;
+    playerOverlay.style.height = `${imgHeight}px`;
 }
 
 // Initialize
